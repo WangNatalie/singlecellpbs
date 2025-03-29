@@ -7,7 +7,7 @@ from helper_functions import combine_features, load_trained_models, average_pred
 
 def read_data(settings):
     de_train = pd.read_parquet(settings["TRAIN_RAW_DATA_PATH"])
-    id_map = pd.read_csv(settings["TEST_RAW_DATA_PATH"])
+    id_map = pd.read_parquet(settings["TEST_RAW_DATA_PATH"])
     sample_submission = pd.read_csv(settings["SAMPLE_SUBMISSION_PATH"], index_col='id')
     return de_train, id_map, sample_submission
 

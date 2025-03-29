@@ -40,7 +40,10 @@ def one_hot_encode(data_train, data_test, out_dir):
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
     encoder = OneHotEncoder()
-    encoder.fit(data_train)
+    combined_data = pd.concat([data_train, 
+                          data_test])
+    # Fit on the combined data
+    encoder.fit(combined_data)
     train_features = encoder.transform(data_train)
     test_features = encoder.transform(data_test)
     np.save(f"{out_dir}/one_hot_train.npy", train_features.toarray().astype(float))

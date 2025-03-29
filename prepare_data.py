@@ -12,7 +12,7 @@ if __name__ == "__main__":
     ## Read data
     print("\nPreparing data...")
     de_train = pd.read_parquet(settings["TRAIN_RAW_DATA_PATH"])
-    id_map = pd.read_csv(settings["TEST_RAW_DATA_PATH"])
+    id_map = pd.read_parquet(settings["TEST_RAW_DATA_PATH"])
     ## Create data augmentation
     de_cell_type = de_train.iloc[:, [0] + list(range(5, de_train.shape[1]))]
     de_sm_name = de_train.iloc[:, [1] + list(range(5, de_train.shape[1]))]
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     std_sm_name = de_sm_name.groupby('sm_name').std().reset_index()
     cell_types = de_cell_type.groupby('cell_type').quantile(0.1).reset_index()['cell_type'] # This is just to get cell types in the right order for the next line
     quantiles_cell_type = pd.concat([pd.DataFrame(cell_types)]+[de_cell_type.groupby('cell_type')[col]\
-.quantile([0.25, 0.50, 0.75], interpolation='linear').unstack().reset_index(drop=True) for col in list(de_train.columns)[5:]], axis=1)
+    .quantile([0.25, 0.50, 0.75], interpolation='linear').unstack().reset_index(drop=True) for col in list(de_train.columns)[5:]], axis=1)
     ## Save data augmentation features
     if not os.path.exists(settings["TRAIN_DATA_AUG_DIR"]):
         os.mkdir(settings["TRAIN_DATA_AUG_DIR"])
@@ -37,5 +37,5 @@ if __name__ == "__main__":
     save_ChemBERTa_features(de_train["SMILES"].tolist(), out_dir=settings["TRAIN_DATA_AUG_DIR"], on_train_data=True)
     sm_name2smiles = {smname:smiles for smname, smiles in zip(de_train['sm_name'], de_train['SMILES'])}
     test_smiles = list(map(sm_name2smiles.get, id_map['sm_name'].values))
-    save_ChemBERTa_features(test_smiles, out_dir=settings["TRAIN_DATA_AUG_DIR"], on_train_data=False)
+    save_ChemBERTa_features(id_map["SMILES"].tolist(), out_dir=settings["TRAIN_DATA_AUG_DIR"], on_train_data=False)
     print("### Done.")

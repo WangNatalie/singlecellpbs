@@ -5,6 +5,10 @@ from argparse import Namespace
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
+from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
@@ -161,12 +165,32 @@ def validation_step(dataloader, model):
     return np.mean(val_losses), np.mean(val_mrrmse)
 
 
+def weight_init(m):
+    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv1d):
+        nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.LSTM) or isinstance(m, nn.GRU):
+        for name, param in m.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.kaiming_normal_(param)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+
+
 def train_function(model, x_train, y_train, x_val, y_val, info_data, config, clip_norm=1.0):
+
+    model.apply(weight_init)
     if model.name in ['GRU']:
         print('lr', config["LEARNING_RATES"][2])
-        opt = torch.optim.Adam(model.parameters(), lr=config["LEARNING_RATES"][2])
+        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][2], weight_decay=1e-4)
     else:
-        opt = torch.optim.Adam(model.parameters(), lr=config["LEARNING_RATES"][0])
+        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][0], weight_decay=1e-4)
+
+    scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.9999, patience=10, verbose=True)
+    
     model.to(device)
     results = {'train_loss': [], 'val_loss': [], 'train_mrrmse': [], 'val_mrrmse': [],\
                'train_cell_type': info_data['train_cell_type'], 'val_cell_type': info_data['val_cell_type'], 'train_sm_name': info_data['train_sm_name'], 'val_sm_name': info_data['val_sm_name'], 'runtime': None}
@@ -182,18 +206,37 @@ def train_function(model, x_train, y_train, x_val, y_val, info_data, config, cli
     best_loss = np.inf
     best_weights = None
     t0 = time.time()
+
+    # Early stopping parameters
+    best_loss = np.inf
+    best_weights = None
+    patience = 50  # Number of epochs to wait for improvement
+    patience_counter = 0
+
     for e in range(config["EPOCHS"]):
         loss, mrrmse = train_step(train_dataloader, model, opt, clip_norm)
         val_loss, val_mrrmse = validation_step(val_dataloader, model)
+
+        scheduler.step(val_loss)
+
         results['train_loss'].append(float(loss))
         results['val_loss'].append(float(val_loss))
         results['train_mrrmse'].append(float(mrrmse))
         results['val_mrrmse'].append(float(val_mrrmse))
+
+
         if val_mrrmse < best_loss:
             best_loss = val_mrrmse
             best_weights = model.state_dict()
+            patience_counter = 0
             print('BEST ----> ')
+        else:   
+            patience_counter += 1
+        if patience_counter >= patience:
+            print(f"Early stopping triggered after {patience} epochs without improvement.")
+            break
         print(f"{model.name} Epoch {e}, train_loss {round(loss,3)}, val_loss {round(val_loss, 3)}, val_mrrmse {val_mrrmse}")
+
     t1 = time.time()
     results['runtime'] = float(t1-t0)
     model.load_state_dict(best_weights)

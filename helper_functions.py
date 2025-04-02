@@ -101,13 +101,20 @@ def combine_features(data_aug_dfs, chem_feats, main_df, one_hot_dfs=None, quanti
         for df in data_aug_dfs:
             if 'cell_type' in df.columns:
                 values = df[df['cell_type']==main_df.iloc[i]['cell_type']].values.squeeze()[1:].astype(float)
+                if values.ndim == 2:  # If 2D, flatten to 1D
+                    values = values.flatten()
                 vec_ = np.concatenate([vec_, values])
             else:
                 assert 'sm_name' in df.columns
                 values = df[df['sm_name']==main_df.iloc[i]['sm_name']].values.squeeze()[1:].astype(float)
+                if values.ndim == 2:  # If 2D, flatten to 1D
+                    values = values.flatten()
                 vec_ = np.concatenate([vec_, values])
         for chem_feat in chem_feats:
-            vec_ = np.concatenate([vec_, chem_feat[i]])
+            chem_values = chem_feat[i]
+            if chem_values.ndim == 2:  # If 2D, flatten to 1D
+                chem_values = chem_values.flatten()
+            vec_ = np.concatenate([vec_, chem_values])
         final_vec = np.concatenate([vec_,np.zeros(add_len-vec_.shape[0],)])
         new_vecs.append(final_vec)
     return np.stack(new_vecs, axis=0).astype(float).reshape(len(main_df), 1, add_len)
@@ -126,7 +133,31 @@ def augment_data(x_, y_):
 
 #### Metrics
 def mrrmse_np(y_pred, y_true):
-    return np.sqrt(np.square(y_true - y_pred).mean(axis=1)).mean()
+    """
+    Calculate Mean Row-wise Root Mean Squared Error (MRRMSE)
+    
+    Args:
+        y_pred (np.ndarray): Predicted values
+        y_true (np.ndarray): True values
+    
+    Returns:
+        float: MRRMSE score
+    """
+    # Ensure inputs are numpy arrays
+    y_pred = np.array(y_pred)
+    y_true = np.array(y_true)
+    
+    # Calculate squared differences
+    squared_diff = np.square(y_true - y_pred)
+    
+    # Calculate mean squared error for each row
+    mse_per_row = np.mean(squared_diff, axis=1, keepdims=True)
+    
+    # Calculate root mean squared error for each row
+    rmse_per_row = np.sqrt(mse_per_row)
+    
+    # Calculate mean of all row-wise RMSEs
+    return float(np.mean(rmse_per_row))
 
 
 #### Training utilities

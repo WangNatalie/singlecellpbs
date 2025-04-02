@@ -37,20 +37,34 @@ if __name__ == "__main__":
     ## Load trained models
     print("\nLoading trained models...")
     trained_models = load_trained_models(path=f'{settings["MODEL_DIR"]}')
-    fold_weights = [0.2421, 0.2814, 0.2500, 0.2088]
+    
+    # Model weights for LSTM and GRU
+    model_weights = [0.8656, 0.1344]  # LSTM, GRU
+    
     ## Start predictions
     print("\nStarting predictions...")
     t0 = time.time()
-    pred1 = average_prediction(test_vec_light, trained_models['light'])
+    
+    # Get predictions from LSTM models (folds 0-2)
+    lstm_models = trained_models['light'][:3]  # First 3 folds
+    lstm_pred = average_prediction(test_vec_light, lstm_models)
+    
+    # Get predictions from GRU models (folds 0-2)
+    gru_models = trained_models['light'][3:6]  # Next 3 folds
+    gru_pred = average_prediction(test_vec_light, gru_models)
+    
+    # Combine LSTM and GRU predictions with model weights
+    final_pred = model_weights[0] * lstm_pred + model_weights[1] * gru_pred
 
     t1 = time.time()
     print("Prediction time: ", t1-t0, " seconds")
     print("\nEnsembling predictions and writing to file...")
     col = list(de_train.columns[5:])
 
-    submission = []
-
-    submission[col] = pred1
+    # Initialize submission DataFrame with id_map
+    submission = id_map.copy()
+    # Add predictions
+    submission[col] = final_pred
 
     if not os.path.exists(settings["SUBMISSION_DIR"]):
         os.mkdir(settings["SUBMISSION_DIR"])

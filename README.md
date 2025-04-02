@@ -9,9 +9,9 @@ This repository implements the 1st place solution for the single cell perturbati
 - Use LSTM, GRU, and 1d-CNN architectures (see `models.py`). 
 3. Loss Functions and Optimizer
 - Use MSE, MAE, BCE, and LogCosh (see `helper_classes.py`)
-- Use Adam optimizer to train the models in a 5-fold cross validation setting.
+- Use AdamW optimizer to train the models in a 5-fold cross validation setting.
 4. Hyperparameters
-- 250 epochs, lr 0.001 for LSTM and 1d-CNN, and 0.0003 for GRU.
+- 150 epochs, lr 0.001 for LSTM and 1d-CNN, and 0.0003 for GRU.
 - Use gradient norm clip value of 1.0 during training
 - Batch size 16
 5. Predictions

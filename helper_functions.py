@@ -1,12 +1,10 @@
 import os
 import json
 import time
-from argparse import Namespace
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -15,9 +13,8 @@ from tqdm import tqdm
 from sklearn.preprocessing import OneHotEncoder
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import random
-from sklearn.model_selection import KFold as KF
 from sklearn.model_selection import StratifiedKFold 
-from models import Conv, LSTM, GRU
+from models import LSTM
 from helper_classes import Dataset
 
 with open("./SETTINGS.json") as file:
@@ -181,16 +178,12 @@ def weight_init(m):
                 nn.init.zeros_(param)
 
 
-def train_function(model, x_train, y_train, x_val, y_val, info_data, config, clip_norm=1.0):
+def train_function(model, x_train, y_train, x_val, y_val, info_data, clip_norm=1.0):
 
     model.apply(weight_init)
-    if model.name in ['GRU']:
-        print('lr', config["LEARNING_RATES"][2])
-        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][2], weight_decay=5e-3) # Higher weight decay to prevent overfitting
-    else:
-        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][0], weight_decay=5e-3)
+    opt = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=5e-3)
 
-    scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.9999, patience=10, verbose=True)
+    scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.9999, patience=6, verbose=True)
     
     model.to(device)
     results = {'train_loss': [], 'val_loss': [], 'train_mrrmse': [], 'val_mrrmse': [],\
@@ -211,10 +204,10 @@ def train_function(model, x_train, y_train, x_val, y_val, info_data, config, cli
     # Early stopping parameters
     best_loss = np.inf
     best_weights = None
-    patience = 50  # Number of epochs to wait for improvement
+    patience = 30  # Number of epochs to wait for improvement
     patience_counter = 0
 
-    for e in range(config["EPOCHS"]):
+    for e in range(150):
         loss, mrrmse = train_step(train_dataloader, model, opt, clip_norm)
         val_loss, val_mrrmse = validation_step(val_dataloader, model)
 
@@ -244,13 +237,13 @@ def train_function(model, x_train, y_train, x_val, y_val, info_data, config, cli
     return model, results
 
 
-def cross_validate_models(X, y, cell_types_sm_names, config=None, scheme='initial', clip_norm=1.0):
+def cross_validate_models(X, y, cell_types_sm_names, scheme='initial', clip_norm=1.0):
     trained_models = []
-    kf_cv = StratifiedKFold(n_splits=config["KF_N_SPLITS"], shuffle=True, random_state=42)
+    kf_cv = StratifiedKFold(n_splits=150, shuffle=True, random_state=42)
     cell_types = cell_types_sm_names['cell_type'].values
 
     for i,(train_idx,val_idx) in enumerate(kf_cv.split(X, cell_types)):
-        print(f"\nSplit {i+1}/{config['KF_N_SPLITS']}...")
+        print(f"\nSplit {i+1}/150...")
         x_train, x_val = X[train_idx], X[val_idx]
         y_train, y_val = y.values[train_idx], y.values[val_idx]
         
@@ -266,29 +259,26 @@ def cross_validate_models(X, y, cell_types_sm_names, config=None, scheme='initia
                     'val_cell_type': cell_types_sm_names.iloc[val_idx]['cell_type'].tolist(),
                     'train_sm_name': cell_types_sm_names.iloc[train_idx]['sm_name'].tolist(),
                     'val_sm_name': cell_types_sm_names.iloc[val_idx]['sm_name'].tolist()}
-        for Model in [LSTM, Conv, GRU]:
-            model = Model(scheme)
-            model, results = train_function(model, x_train, y_train, x_val, y_val, info_data, config=config, clip_norm=clip_norm)
-            model.to('cpu')
-            trained_models.append(model)
-            torch.save(model.state_dict(), f'{settings["MODEL_DIR"]}pytorch_{model.name}_{scheme}_fold{i}.pt')
-            with open(f'{settings["LOGS_DIR"]}{model.name}_{scheme}_fold{i}.json', 'w') as file:
-                json.dump(results, file)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+
+        model = LSTM(scheme)
+        model, results = train_function(model, x_train, y_train, x_val, y_val, info_data, clip_norm=clip_norm)
+        model.to('cpu')
+        trained_models.append(model)
+        torch.save(model.state_dict(), f'{settings["MODEL_DIR"]}pytorch_{model.name}_{scheme}_fold{i}.pt')
+        with open(f'{settings["LOGS_DIR"]}{model.name}_{scheme}_fold{i}.json', 'w') as file:
+            json.dump(results, file)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     return trained_models
 
-def train_validate(X_vec, X_vec_light, X_vec_heavy, y, cell_types_sm_names, config):
+def train_validate(X_vec_light, y, cell_types_sm_names):
 
-    trained_models = {'initial': [], 'light': [], 'heavy': []}
     if not os.path.exists(settings["MODEL_DIR"]):
         os.mkdir(settings["MODEL_DIR"])
     if not os.path.exists(settings["LOGS_DIR"]):
         os.mkdir(settings["LOGS_DIR"])
-    for scheme, clip_norm, input_features in zip(['initial', 'light', 'heavy'], config["CLIP_VALUES"], [X_vec, X_vec_light, X_vec_heavy]):
-        seed_everything()
-        models = cross_validate_models(input_features, y, cell_types_sm_names, config=config, scheme=scheme, clip_norm=clip_norm)
-        trained_models[scheme].extend(models)
+    trained_models = cross_validate_models(X_vec_light, y, cell_types_sm_names, scheme='light', clip_norm=1.0)
+
     return trained_models
 
 #### Inference utilities
@@ -329,12 +319,11 @@ def load_trained_models(path=settings["MODEL_DIR"], kf_n_splits=5):
     trained_models = {'initial': [], 'light': [], 'heavy': []}
     for scheme in ['initial', 'light', 'heavy']:
         for fold in range(kf_n_splits):
-            for Model in [LSTM, Conv, GRU]:
-                model = Model(scheme)
-                for weights_path in os.listdir(path):
-                    if model.name in weights_path and scheme in weights_path and f'fold{fold}' in weights_path:
-                        model.load_state_dict(torch.load(f'{path}{weights_path}', map_location='cpu'))
-                        trained_models[scheme].append(model)
+            model = LSTM(scheme)
+            for weights_path in os.listdir(path):
+                if model.name in weights_path and scheme in weights_path and f'fold{fold}' in weights_path:
+                    model.load_state_dict(torch.load(f'{path}{weights_path}', map_location='cpu'))
+                    trained_models[scheme].append(model)
     return trained_models
 
 def create_stratified_sample(de_train, cell_type_boost_factors):

@@ -16,6 +16,7 @@ from sklearn.preprocessing import OneHotEncoder
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import random
 from sklearn.model_selection import KFold as KF
+from sklearn.model_selection import StratifiedKFold 
 from models import Conv, LSTM, GRU
 from helper_classes import Dataset
 
@@ -185,9 +186,9 @@ def train_function(model, x_train, y_train, x_val, y_val, info_data, config, cli
     model.apply(weight_init)
     if model.name in ['GRU']:
         print('lr', config["LEARNING_RATES"][2])
-        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][2], weight_decay=1e-4)
+        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][2], weight_decay=5e-3) # Higher weight decay to prevent overfitting
     else:
-        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][0], weight_decay=1e-4)
+        opt = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATES"][0], weight_decay=5e-3)
 
     scheduler = ReduceLROnPlateau(opt, mode='min', factor=0.9999, patience=10, verbose=True)
     
@@ -243,12 +244,24 @@ def train_function(model, x_train, y_train, x_val, y_val, info_data, config, cli
     return model, results
 
 
-def cross_validate_models(X, y, kf_cv, cell_types_sm_names, config=None, scheme='initial', clip_norm=1.0):
+def cross_validate_models(X, y, cell_types_sm_names, config=None, scheme='initial', clip_norm=1.0):
     trained_models = []
-    for i,(train_idx,val_idx) in enumerate(kf_cv.split(X)):
-        print(f"\nSplit {i+1}/{kf_cv.n_splits}...")
+    kf_cv = StratifiedKFold(n_splits=config["KF_N_SPLITS"], shuffle=True, random_state=42)
+    cell_types = cell_types_sm_names['cell_type'].values
+
+    for i,(train_idx,val_idx) in enumerate(kf_cv.split(X, cell_types)):
+        print(f"\nSplit {i+1}/{config['KF_N_SPLITS']}...")
         x_train, x_val = X[train_idx], X[val_idx]
         y_train, y_val = y.values[train_idx], y.values[val_idx]
+        
+        # Print distribution of cell types in this fold
+        train_cell_types = cell_types_sm_names.iloc[train_idx]['cell_type']
+        val_cell_types = cell_types_sm_names.iloc[val_idx]['cell_type']
+        print("Training fold cell type distribution:")
+        print(pd.Series(train_cell_types).value_counts(normalize=True))
+        print("Validation fold cell type distribution:")
+        print(pd.Series(val_cell_types).value_counts(normalize=True))
+
         info_data = {'train_cell_type': cell_types_sm_names.iloc[train_idx]['cell_type'].tolist(),
                     'val_cell_type': cell_types_sm_names.iloc[val_idx]['cell_type'].tolist(),
                     'train_sm_name': cell_types_sm_names.iloc[train_idx]['sm_name'].tolist(),
@@ -266,7 +279,7 @@ def cross_validate_models(X, y, kf_cv, cell_types_sm_names, config=None, scheme=
     return trained_models
 
 def train_validate(X_vec, X_vec_light, X_vec_heavy, y, cell_types_sm_names, config):
-    kf_cv = KF(n_splits=config["KF_N_SPLITS"], shuffle=True, random_state=42)
+
     trained_models = {'initial': [], 'light': [], 'heavy': []}
     if not os.path.exists(settings["MODEL_DIR"]):
         os.mkdir(settings["MODEL_DIR"])
@@ -274,7 +287,7 @@ def train_validate(X_vec, X_vec_light, X_vec_heavy, y, cell_types_sm_names, conf
         os.mkdir(settings["LOGS_DIR"])
     for scheme, clip_norm, input_features in zip(['initial', 'light', 'heavy'], config["CLIP_VALUES"], [X_vec, X_vec_light, X_vec_heavy]):
         seed_everything()
-        models = cross_validate_models(input_features, y, kf_cv, cell_types_sm_names, config=config, scheme=scheme, clip_norm=clip_norm)
+        models = cross_validate_models(input_features, y, cell_types_sm_names, config=config, scheme=scheme, clip_norm=clip_norm)
         trained_models[scheme].extend(models)
     return trained_models
 
@@ -323,3 +336,32 @@ def load_trained_models(path=settings["MODEL_DIR"], kf_n_splits=5):
                         model.load_state_dict(torch.load(f'{path}{weights_path}', map_location='cpu'))
                         trained_models[scheme].append(model)
     return trained_models
+
+def create_stratified_sample(de_train, cell_type_boost_factors):
+    
+    boosted_indices = []
+    original_indices = np.arange(len(de_train))
+    
+    # Get indices for each cell type to boost
+    for cell_type, boost_factor in cell_type_boost_factors.items():
+        if boost_factor > 1:  # Only boost if factor > 1
+            cell_indices = de_train[de_train['cell_type'] == cell_type].index.tolist()
+            # Add these indices multiple times based on boost factor
+            for _ in range(boost_factor - 1):  # -1 because we already have them once
+                boosted_indices.extend(cell_indices)
+    
+    # Combine original and boosted indices
+    all_indices = np.concatenate([original_indices, np.array(boosted_indices)])
+    
+    # Create the new boosted dataframe
+    boosted_df = de_train.iloc[all_indices].reset_index(drop=True)
+
+    print("Cell type distribution before boosting:")
+    print(de_train['cell_type'].value_counts()/len(de_train))
+    print("\nCell type distribution after boosting:")
+    print(boosted_df['cell_type'].value_counts()/len(boosted_df))
+    
+    return boosted_df, all_indices
+
+def apply_indices_to_features(feature_array, indices):
+    return feature_array[indices]
